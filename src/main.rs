@@ -47,7 +47,10 @@ struct WebhookData {
 }
 
 fn main() {
-    dotenv().expect(".env file not found");
+    match dotenv() {
+        Err(e) => println!("INFO: .env file was not found or could not be loaded"),
+        Ok(_) => (),
+    }
     let mut mqtt_conn = MqttConn {
         id: None,
         host: None,
