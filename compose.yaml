@@ -2,4 +2,5 @@ services:
   camera-hook:
     container_name: camera-hook
     env_file: .env
-    image: camera-hook:latest
+    image: ghcr.io/gckopper/camera-hook:latest
+    restart: unless-stopped
