@@ -48,7 +48,7 @@ struct WebhookData {
 
 fn main() {
     match dotenv() {
-        Err(e) => println!("INFO: .env file was not found or could not be loaded"),
+        Err(e) => println!("INFO: .env file was not found or could not be loaded. {:?}", e),
         Ok(_) => (),
     }
     let mut mqtt_conn = MqttConn {
@@ -83,14 +83,14 @@ fn main() {
     let discord_url = match webhook_data.discord_url {
         Some(d) => d,
         None => {
-            println!("You are missing the DISCORD_URL!");
+            println!("ERROR: You are missing the DISCORD_URL!");
             exit(2);
         }
     };
     let (camera_url, message) = match (webhook_data.camera_url, webhook_data.message) {
         (Some(c), Some(m)) => (c, m),
         (_, _) => {
-            println!("You need to provide either a CAMERA_URL os a DISCORD_MESSAGE");
+            println!("ERROR: You need to provide either a CAMERA_URL os a DISCORD_MESSAGE");
             exit(3);
         }
     };
@@ -98,7 +98,7 @@ fn main() {
     match (mqtt_conn.id, mqtt_conn.host) {
         (Some(id), Some(host)) => mqttoptions = MqttOptions::new(id, host, mqtt_conn.port),
         (_, _) => {
-            println!("You are either missing MQTT_ID, MQTT_HOST for the MQTT connection!");
+            println!("ERROR: You are either missing MQTT_ID, MQTT_HOST for the MQTT connection!");
             exit(4);
         }
     }
@@ -111,14 +111,22 @@ fn main() {
     }
 
     let (mut client, mut connection) = Client::new(mqttoptions, 10);
-    match mqtt_conn.topic {
-        Some(topic) => client.subscribe(topic, QoS::AtMostOnce).unwrap(),
+    let topic = match mqtt_conn.topic {
+        Some(s) => s,
         None => {
-            println!("The MQTT_TOPIC is missing");
+            println!("ERROR: The MQTT_TOPIC is missing");
             exit(5);
+        },
+    };
+    match client.subscribe(topic, QoS::AtMostOnce) {
+        Ok(_) => {},
+        Err(e) =>{
+            println!("ERROR: {:?}", e);
+            exit(6);
         },
     }
     
+    println!("INFO: Connected to the mqtt server successfully");
 
     // Iterate to poll the eventloop for connection progress
     for _ in connection.iter().filter_map(|n| {
@@ -183,10 +191,10 @@ fn trigger_hook(url: &str, client: &reqwest::blocking::Client, message: String, 
     let multipart = reqwest::blocking::multipart::Form::new()
         .text("content", message)
         .part("files[0]", pic);
-    return Ok(client
+    let status = client
         .post(url)
         .multipart(multipart)
         .send()?
-        .status()
-    )
+        .status();
+    return Ok(status)
 }
