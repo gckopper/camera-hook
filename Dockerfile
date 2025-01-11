@@ -4,7 +4,9 @@ RUN update-ca-certificates
 
 WORKDIR /app
 
-COPY ./ .
+COPY ./src src/
+COPY Cargo.lock Cargo.lock 
+COPY Cargo.toml Cargo.toml 
 
 RUN cargo build --release
 
