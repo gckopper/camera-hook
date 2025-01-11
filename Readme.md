@@ -13,11 +13,20 @@ In my house I have a wireless doorbell and so I loaded an ESP8266 with Tasmota a
 ![Diagram as described above](https://github.com/user-attachments/assets/4ce1b859-6adc-4b8f-a648-0fcb5d04bf85#gh-light-mode-only)
 ![Diagram as described above](https://github.com/user-attachments/assets/3a30318b-777c-41d5-bc15-dc372f4e1cfd#gh-dark-mode-only)
 
-## Build
-Binaries are stored in the target folder!
+## Build (Manual)
+
+Requires Rust. Binaries are stored in the target folder!
 
 ### Debug
 `cargo build`
 
 ### Release
 `cargo build --release`
+
+## Build (Docker)
+
+`docker build -t camera-hook .`
+
+## Usage:
+
+To deploy this with docker compose (or nerdctl) remember to copy the `.env.example` file, rename it to `.env` and populate it according to your needs.
