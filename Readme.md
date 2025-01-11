@@ -1,5 +1,7 @@
 # Camera Hook!
 
+[![Docker](https://github.com/gckopper/camera-hook/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/gckopper/camera-hook/actions/workflows/docker-publish.yml)
+
 - Works for me!
 - Uses distroless as container base
 - No openssl
