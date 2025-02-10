@@ -1,10 +1,11 @@
-use reqwest::Error;
-use rumqttc::{Client, MqttOptions, QoS};
-use std::{time::Duration, process::exit};
-use serde::Deserialize;
+use base64::Engine;
 use bytes::Bytes;
 use dotenvy::dotenv;
+use reqwest::Error;
+use rumqttc::{Client, MqttOptions, QoS};
+use serde::Deserialize;
 use std::env;
+use std::{process::exit, time::Duration};
 
 // {\"Time\":\"2024-02-03T23:16:58\",\"RfReceived\":{\"Data\":\"0xE0F118\",\"Bits\":24,\"Protocol\":1,\"Pulse\":200}}
 #[derive(Deserialize)]
@@ -42,13 +43,17 @@ struct MqttConn {
 
 struct WebhookData {
     discord_url: Option<String>,
+    gotify_url: Option<String>,
     camera_url: Option<String>,
     message: Option<String>,
 }
 
 fn main() {
     match dotenv() {
-        Err(e) => println!("INFO: .env file was not found or could not be loaded. {:?}", e),
+        Err(e) => println!(
+            "INFO: .env file was not found or could not be loaded. {:?}",
+            e
+        ),
         Ok(_) => (),
     }
     let mut mqtt_conn = MqttConn {
@@ -61,6 +66,7 @@ fn main() {
     };
     let mut webhook_data = WebhookData {
         discord_url: None,
+        gotify_url: None,
         camera_url: None,
         message: None,
     };
@@ -74,23 +80,21 @@ fn main() {
             "MQTT_PASSWORD" => mqtt_conn.password = Some(value),
             "MQTT_TOPIC" => mqtt_conn.topic = Some(value),
             "DISCORD_URL" => webhook_data.discord_url = Some(value),
+            "GOTIFY_URL" => webhook_data.gotify_url = Some(value),
             "CAMERA_URL" => webhook_data.camera_url = Some(value),
             "DISCORD_MESSAGE" => webhook_data.message = Some(value),
             "RF_CODE" => rf_code = Some(value),
             _ => (),
         }
     }
-    let discord_url = match webhook_data.discord_url {
-        Some(d) => d,
-        None => {
-            println!("ERROR: You are missing the DISCORD_URL!");
-            exit(2);
-        }
+    if webhook_data.discord_url.is_none() && webhook_data.gotify_url.is_none() {
+        println!("ERROR: You are missing either a DISCORD_URL or a GOTIFY_URL!");
+        exit(2);
     };
     let (camera_url, message) = match (webhook_data.camera_url, webhook_data.message) {
         (Some(c), Some(m)) => (c, m),
         (_, _) => {
-            println!("ERROR: You need to provide either a CAMERA_URL os a DISCORD_MESSAGE");
+            println!("ERROR: You need to provide either a CAMERA_URL or a DISCORD_MESSAGE");
             exit(3);
         }
     };
@@ -116,67 +120,106 @@ fn main() {
         None => {
             println!("ERROR: The MQTT_TOPIC is missing");
             exit(5);
-        },
+        }
     };
     match client.subscribe(topic, QoS::AtMostOnce) {
-        Ok(_) => {},
-        Err(e) =>{
+        Ok(_) => {}
+        Err(e) => {
             println!("ERROR: {:?}", e);
             exit(6);
-        },
+        }
     }
-    
+
     println!("INFO: Connected to the mqtt server successfully");
 
     // Iterate to poll the eventloop for connection progress
-    for _ in connection.iter().filter_map(|n| {
-        match n {
+    for _ in connection
+        .iter()
+        .filter_map(|n| match n {
             Ok(e) => Some(e),
             Err(_) => None,
-        }
-    }).filter_map(|m| {
-        match m {
+        })
+        .filter_map(|m| match m {
             rumqttc::Event::Outgoing(_) => None,
             rumqttc::Event::Incoming(e) => Some(e),
-        }
-    }).filter_map(|i| {
-        match i {
+        })
+        .filter_map(|i| match i {
             rumqttc::Packet::Publish(e) => Some(e),
             _ => None,
-        }
-    }).filter_map(|notification| {
-        match serde_json::from_slice::<DataPoint>(&notification.payload) {
-            Ok(d) => Some(d),
-            Err(e) => {
-                println!("ERROR: {:?}", e);
-                None},
-        }
-    }).filter(|d| {
-        match (&rf_code, d.rf_received.data.as_str()) {
+        })
+        .filter_map(|notification| {
+            match serde_json::from_slice::<DataPoint>(&notification.payload) {
+                Ok(d) => Some(d),
+                Err(e) => {
+                    println!("ERROR: {:?}", e);
+                    None
+                }
+            }
+        })
+        .filter(|d| match (&rf_code, d.rf_received.data.as_str()) {
             (None, _) => true,
             (Some(c), received_code) => c == received_code,
-        }
-    }) {
+        })
+    {
         let client = reqwest::blocking::Client::new();
         let pic = match get_picture(camera_url.as_str(), &client) {
             Err(e) => {
                 println!("ERROR: {:?}", e);
                 continue;
-            },
+            }
             Ok(p) => p,
         };
-        let pic = pic;
-        let res = trigger_hook(discord_url.as_str(), &client, message.clone(), pic);
-        match res {
-            Ok(s) => {
-                match s {
+        if let Some(discord_url) = &webhook_data.discord_url {
+            let res = trigger_discord_hook(discord_url.as_str(), &client, message.clone(), &pic);
+            match res {
+                Ok(s) => match s.status() {
                     reqwest::StatusCode::OK | reqwest::StatusCode::NO_CONTENT => (),
                     _ => println!("{:?}", s),
-                }
+                },
+                Err(e) => println!("{:?}", e),
             }
-            Err(e) => println!("{:?}", e),
+        }
+        if let Some(gotify_url) = &webhook_data.gotify_url {
+            let res = trigger_gotify_hook(gotify_url.as_str(), &client, message.clone(), &pic);
+            match res {
+                Ok(s) => match s.status() {
+                    reqwest::StatusCode::OK => (),
+                    _ => println!("{:?}", s),
+                },
+                Err(e) => println!("{:?}", e),
+            }
         }
     }
+}
+
+fn trigger_gotify_hook(
+    url: &str,
+    client: &reqwest::blocking::Client,
+    message: String,
+    pic: &Bytes,
+) -> Result<reqwest::blocking::Response, reqwest::Error> {
+    let base64_pic = base64::prelude::BASE64_STANDARD.encode(pic);
+    let json = format!(
+        r#"{{
+        "message": "![](data:image/jpg;base64,{})", 
+        "title": "{}", 
+        "priority": {}, 
+        "extras": {{
+            "client::display": {{
+                "contentType": "text/markdown"
+            }},
+            "client::notification": {{
+                "bigImageUrl": "data:image/jpg;base64,{}"
+            }}
+        }}
+    }}"#,
+        base64_pic, message, 5, base64_pic
+    );
+    client
+        .post(url)
+        .body(json)
+        .header("Content-Type", "application/json")
+        .send()
 }
 
 fn get_picture(url: &str, client: &reqwest::blocking::Client) -> Result<Bytes, Error> {
@@ -184,17 +227,17 @@ fn get_picture(url: &str, client: &reqwest::blocking::Client) -> Result<Bytes, E
     req.bytes()
 }
 
-fn trigger_hook(url: &str, client: &reqwest::blocking::Client, message: String, pic: Bytes) -> Result<reqwest::StatusCode, Error>{
+fn trigger_discord_hook(
+    url: &str,
+    client: &reqwest::blocking::Client,
+    message: String,
+    pic: &Bytes,
+) -> Result<reqwest::blocking::Response, reqwest::Error> {
     let pic = reqwest::blocking::multipart::Part::bytes(pic.to_vec())
         .file_name("files.jpg")
         .mime_str("image/jpeg")?;
     let multipart = reqwest::blocking::multipart::Form::new()
         .text("content", message)
         .part("files[0]", pic);
-    let status = client
-        .post(url)
-        .multipart(multipart)
-        .send()?
-        .status();
-    return Ok(status)
+    client.post(url).multipart(multipart).send()
 }
